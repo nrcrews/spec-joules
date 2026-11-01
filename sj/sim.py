@@ -1,8 +1,7 @@
 """A made-up GPU and engine for dry runs and tests. Nothing it produces is a measurement.
 
-Each decode step pays a fixed memory cost plus compute that grows with the tokens verified
-and shrinks with the clock. Speculation verifies `DRAFT_LEN + 1` tokens per sequence per step
-and keeps `ACCEPTANCE`-weighted ones; a lower clock saves power wherever the step waits on memory.
+A decode step costs fixed memory time plus compute that scales with tokens verified and
+inversely with the clock. Speculation verifies more tokens per step and keeps some of them.
 """
 
 from __future__ import annotations
@@ -14,6 +13,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
+from sj import load
 from sj.gpu import GpuInfo
 
 MAX_CLOCK_MHZ = 1980.0
@@ -148,13 +148,12 @@ def _handler(gpu: SimGpu) -> type[BaseHTTPRequestHandler]:
 
         def do_GET(self) -> None:
             if self.path == "/metrics":
-                lines = [
-                    f'vllm:spec_decode_num_drafts_total{{model_name="sim"}} {gpu.drafts}',
-                    f'vllm:spec_decode_num_draft_tokens_total{{model_name="sim"}} '
-                    f"{gpu.draft_tokens}",
-                    f'vllm:spec_decode_num_accepted_tokens_total{{model_name="sim"}} '
-                    f"{gpu.accepted}",
-                ]
+                counters = {
+                    load.DRAFTS: gpu.drafts,
+                    load.DRAFT_TOKENS: gpu.draft_tokens,
+                    load.ACCEPTED: gpu.accepted,
+                }
+                lines = [f"{name} {value}" for name, value in counters.items()]
                 body = "\n".join(lines) if gpu.speculative else "# no drafts"
                 self._send(body.encode(), "text/plain")
             elif self.path == "/v1/models":

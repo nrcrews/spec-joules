@@ -1,9 +1,8 @@
-"""Sweeps a GPU's locked SM clock and batch size against one vLLM server.
+"""Sweeps locked SM clocks and batch sizes against one vLLM server.
 
-Run it once against a plain server (`--arm plain`) and once against a server with a draft
-model (`--arm spec`). Each run writes a `meta` line, then one `run` line per
-(clock, batch, repeat). The default clock comes first, unlocked. The clock is unlocked again
-with `nvidia-smi -rgc` on exit, Ctrl-C and SIGTERM included.
+Run once per arm: `--arm plain` for a plain server, `--arm spec` for one with a draft model.
+Writes a `meta` line, then a `run` line per clock, batch and repeat. The default clock runs
+first. The clock is unlocked on exit, Ctrl-C and SIGTERM included.
 """
 
 from __future__ import annotations
@@ -28,6 +27,7 @@ from sj.gpu import Gpu, NvmlGpu, Sampler, clock_steps
 T = TypeVar("T")
 Arm = Literal["plain", "spec"]
 BATCHES = [1, 2, 4, 8, 16, 32, 64, 128]
+WARMUP_OFFSET = 1000  # warmups start elsewhere in the prompt list
 
 
 @dataclass(frozen=True)
@@ -134,7 +134,6 @@ def sweep(target: Target, args: argparse.Namespace, out: TextIO) -> None:
     locked = args.clocks or clock_steps(info, args.steps, args.low_share)
     clocks: list[float | None] = [None, *locked]
     texts = prompts.interleave(prompts.read(args.prompts))
-    checked = False
 
     for repeat in range(args.repeats):
         for clock in clocks:
@@ -145,28 +144,23 @@ def sweep(target: Target, args: argparse.Namespace, out: TextIO) -> None:
             for batch in args.batches:
                 workload = load.Workload(batch, args.duration, args.max_tokens)
                 warmup = dataclasses.replace(workload, duration_s=min(2.0, args.duration))
-                asyncio.run(load.run(target.url, target.model, texts, warmup, 10_000))
+                asyncio.run(load.run(target.url, target.model, texts, warmup, WARMUP_OFFSET))
 
                 row = measure(target, texts, workload, offset(batch, repeat))
-                if not checked:
-                    check_arm(args.arm, row)
-                    checked = True
-                record = {
-                    "type": "run",
-                    "arm": args.arm,
-                    "clock_mhz": clock,
-                    "batch": batch,
-                    "repeat": repeat,
-                    **row,
-                }
-                out.write(json.dumps(record) + "\n")
+                check_arm(args.arm, row)
+                key = {"arm": args.arm, "clock_mhz": clock, "batch": batch, "repeat": repeat}
+                out.write(json.dumps({"type": "run", **key, **row}) + "\n")
                 out.flush()
-                rate = row["acceptance_rate"]
-                accepted = "" if rate is None else f"  accept {rate:.0%}"
-                log(
-                    f"  b={batch:<3} {row['tokens_per_s']:8.1f} tok/s  "
-                    f"{row['mean_power_w']:6.1f} W  {row['j_per_token']:.3f} J/tok{accepted}"
-                )
+                log(describe(batch, row))
+
+
+def describe(batch: int, row: dict[str, Any]) -> str:
+    line = (
+        f"  b={batch:<3} {row['tokens_per_s']:8.1f} tok/s  "
+        f"{row['mean_power_w']:6.1f} W  {row['j_per_token']:.3f} J/tok"
+    )
+    rate = row["acceptance_rate"]
+    return line if rate is None else f"{line}  accept {rate:.0%}"
 
 
 def meta(target: Target, args: argparse.Namespace) -> dict[str, Any]:

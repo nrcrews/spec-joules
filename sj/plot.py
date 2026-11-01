@@ -1,10 +1,7 @@
 """Turns sweep results into charts whose titles are computed from the data.
 
-Pass the plain and speculative results files together. For each batch size:
-- plain: no draft model, default clock
-- underclocked: no draft model, the locked clock with the least energy per token
-- speculative: draft model, default clock
-- both: draft model, its own best locked clock
+Each batch size is compared four ways: plain (default clock), underclocked (best locked
+clock), speculative (default clock) and both (draft model at its own best locked clock).
 """
 
 from __future__ import annotations
@@ -28,14 +25,16 @@ from matplotlib.figure import Figure
 
 SIZE_IN = (8.0, 4.5)  # 1600 x 900 at 200 dpi
 DPI = 200
-STACK_TOLERANCE = 2.0  # percentage points of slack before calling it competition
-SAME_CLOCK_MHZ = 30.0
+TOLERANCE = 2.0  # percentage points of slack before calling it competition
+SAME_CLOCK_MHZ = 30.0  # best clocks closer than this count as the same
 TIE = 0.01  # energies this close count as equal when picking the best clock
-MARKER_LABELS = {"Sum", "If independent"}  # best clocks closer than this count as the same
+MARKERS = {"Sum", "If independent"}  # legend entries that go after the bars
 
 FONTS = ["Inter", "Arial", "DejaVu Sans"]
 LINE: dict[str, Any] = {"linewidth": 2, "marker": "o", "markersize": 6.5, "zorder": 3}
 LEGEND: dict[str, Any] = {"loc": "upper left", "bbox_to_anchor": (0.03, 0.835), "frameon": False}
+SUM_MARK: dict[str, Any] = {"marker": "_", "s": 260, "linewidths": 2.5, "zorder": 4}
+RING_MARK: dict[str, Any] = {"marker": "o", "s": 34, "linewidths": 1.5, "zorder": 5}
 WATERMARK: dict[str, Any] = {"fontsize": 32, "fontweight": "bold", "alpha": 0.22, "rotation": 18}
 
 
@@ -111,11 +110,15 @@ class Savings:
         return 100 * (1 - (1 - self.clock / 100) * (1 - self.spec / 100))
 
     @property
+    def clock_moved(self) -> bool:
+        return abs(self.spec_best_mhz - self.plain_best_mhz) >= SAME_CLOCK_MHZ
+
+    @property
     def verdict(self) -> str:
         """`add up` to the sum, `stack` like independent savings, or `compete`."""
-        if self.both >= self.total - STACK_TOLERANCE:
+        if self.both >= self.total - TOLERANCE:
             return "add up"
-        if self.both >= self.independent - STACK_TOLERANCE:
+        if self.both >= self.independent - TOLERANCE:
             return "stack"
         return "compete"
 
@@ -155,7 +158,12 @@ def summarize(runs: list[dict[str, Any]]) -> Table:
 
 
 def batches(table: Table) -> list[int]:
-    return sorted({b for arm, b, _ in table if arm == "plain"} & {b for arm, b, _ in table})
+    by_arm = [{b for a, b, _ in table if a == arm} for arm in ("plain", "spec")]
+    return sorted(by_arm[0] & by_arm[1])
+
+
+def mj(table: Table, arm: str, batch: int, clock: float | None) -> float:
+    return 1000 * table[(arm, batch, clock)].j_per_token
 
 
 def locked_clocks(table: Table, arm: str, batch: int) -> list[float]:
@@ -163,10 +171,7 @@ def locked_clocks(table: Table, arm: str, batch: int) -> list[float]:
 
 
 def best_clock(table: Table, arm: str, batch: int) -> float:
-    """The fastest locked clock within `TIE` of the least energy per token.
-
-    Clocks that close are a tie in practice; preferring the fastest keeps noise from picking.
-    """
+    """The fastest locked clock within `TIE` of the least energy per token."""
     clocks = locked_clocks(table, arm, batch)
     least = min(table[(arm, batch, c)].j_per_token for c in clocks)
     return max(c for c in clocks if table[(arm, batch, c)].j_per_token <= least * (1 + TIE))
@@ -275,12 +280,14 @@ class Canvas:
 
     def legend(self, fig: Figure, ax: Axes) -> None:
         handles, labels = ax.get_legend_handles_labels()
-        # Bars before markers, whatever order matplotlib collected them in.
-        order = sorted(range(len(labels)), key=lambda i: labels[i] in MARKER_LABELS)
+        order = sorted(range(len(labels)), key=lambda i: labels[i] in MARKERS)
         handles, labels = [handles[i] for i in order], [labels[i] for i in order]
         legend = fig.legend(handles, labels, ncol=len(labels), fontsize=8.5, **LEGEND)
         for text in legend.get_texts():
             text.set_color(self.t.ink2)
+
+    def xlabel(self, ax: Axes, text: str) -> None:
+        ax.set_xlabel(text, color=self.t.muted, fontsize=8.5)
 
     def save(self, fig: Figure, path: Path) -> None:
         fig.savefig(path, facecolor=self.t.surface)
@@ -289,58 +296,58 @@ class Canvas:
 
 def energy_chart(c: Canvas, table: Table, batch: int, out: Path) -> None:
     s = savings(table, batch)
-    base = table[("plain", batch, None)].j_per_token
     subtitle = (
-        f"Energy per output token, {batch} in flight. Plain: {1000 * base:,.0f} mJ. "
+        f"Energy per output token, {batch} in flight. "
+        f"Plain: {mj(table, 'plain', batch, None):,.0f} mJ. "
         f"Saved: clock {s.clock:.0f}%, speculation {s.spec:.0f}%, both {s.both:.0f}%."
     )
     fig, ax = c.chart(energy_title(table, batch), subtitle)
-    for arm, color, label in (("plain", c.t.plain, "Plain"), ("spec", c.t.spec, "Speculative")):
+    dashed: dict[str, Any] = {"linewidth": 1.25, "linestyle": (0, (4, 3))}
+    arms = (
+        ("plain", c.t.plain, "Plain", "Underclocked", 9),
+        ("spec", c.t.spec, "Speculative", "Both", -15),
+    )
+
+    for arm, color, default_label, locked_label, label_dy in arms:
         clocks = locked_clocks(table, arm, batch)
-        ys = [1000 * table[(arm, batch, clk)].j_per_token for clk in clocks]
-        default = 1000 * table[(arm, batch, None)].j_per_token
-        ax.axhline(default, color=color, linewidth=1.25, linestyle=(0, (4, 3)), zorder=2)
-        ax.plot([], [], color=color, linewidth=1.25, linestyle=(0, (4, 3)), label=f"{label}")
-        locked = "Underclocked" if arm == "plain" else "Both"
-        ax.plot(clocks, ys, color=color, mec=c.t.surface, label=locked, **LINE)
+        ax.axhline(mj(table, arm, batch, None), color=color, zorder=2, **dashed)
+        ax.plot([], [], color=color, label=default_label, **dashed)
+        ys = [mj(table, arm, batch, clock) for clock in clocks]
+        ax.plot(clocks, ys, color=color, mec=c.t.surface, label=locked_label, **LINE)
+
         best = best_clock(table, arm, batch)
-        y = 1000 * table[(arm, batch, best)].j_per_token
-        ax.annotate(
-            f"{best:.0f} MHz",
-            (best, y),
-            xytext=(0, 9 if arm == "plain" else -15),
-            textcoords="offset points",
-            ha="center",
-            fontsize=8.5,
-            color=c.t.ink2,
-        )
+        xy = (best, mj(table, arm, batch, best))
+        offset: dict[str, Any] = {"xytext": (0, label_dy), "textcoords": "offset points"}
+        ax.annotate(f"{best:.0f} MHz", xy, ha="center", fontsize=8.5, color=c.t.ink2, **offset)
+
     c.legend(fig, ax)
     clocks = locked_clocks(table, "plain", batch)
-    ax.set_xticks(clocks, [f"{clk:,.0f}" for clk in clocks])
-    ax.set_xlabel(
-        "Locked SM clock (MHz); dashed lines: default clock", color=c.t.muted, fontsize=8.5
-    )
+    ax.set_xticks(clocks, [f"{clock:,.0f}" for clock in clocks])
+    c.xlabel(ax, "Locked SM clock (MHz); dashed lines: default clock")
     ax.set_ylim(0, ax.get_ylim()[1] * 1.08)
     ax.yaxis.set_major_formatter(lambda value, _: f"{value:,.0f} mJ")
     c.save(fig, out / f"energy-b{batch}.png")
 
 
 def best_clock_chart(c: Canvas, rows: list[Savings], out: Path) -> None:
-    moved = [r for r in rows if abs(r.spec_best_mhz - r.plain_best_mhz) >= SAME_CLOCK_MHZ]
-    detail = ", ".join(f"{r.batch}" for r in moved) if moved else "none"
+    moved = [str(r.batch) for r in rows if r.clock_moved]
     subtitle = (
-        f"Fastest locked clock within 1% of the least energy per token. Moves at batch: {detail}."
+        "Fastest locked clock within 1% of the least energy per token. "
+        f"Moves at batch: {', '.join(moved) or 'none'}."
     )
     fig, ax = c.chart(best_clock_title(rows), subtitle)
     xs = list(range(len(rows)))
-    ax.plot(xs, [r.plain_best_mhz for r in rows], color=c.t.plain, mec=c.t.surface,
-            label="Without speculation", **LINE)  # fmt: skip
-    ax.plot(xs, [r.spec_best_mhz for r in rows], color=c.t.spec, mec=c.t.surface,
-            label="With speculation", **LINE)  # fmt: skip
+    lines = (
+        ("Without speculation", c.t.plain, [r.plain_best_mhz for r in rows]),
+        ("With speculation", c.t.spec, [r.spec_best_mhz for r in rows]),
+    )
+    for label, color, ys in lines:
+        ax.plot(xs, ys, color=color, mec=c.t.surface, label=label, **LINE)
+
     c.legend(fig, ax)
     ax.set_xticks(xs, [str(r.batch) for r in rows])
-    ax.set_xlabel("Requests in flight", color=c.t.muted, fontsize=8.5)
-    top = max(max(r.plain_best_mhz, r.spec_best_mhz) for r in rows)
+    c.xlabel(ax, "Requests in flight")
+    top = max(y for _, _, ys in lines for y in ys)
     ax.set_ylim(0, top * 1.15)
     ax.yaxis.set_major_formatter(lambda value, _: f"{value:,.0f} MHz")
     c.save(fig, out / "best-clock.png")
@@ -361,15 +368,18 @@ def headline_chart(c: Canvas, rows: list[Savings], out: Path) -> None:
     )
     for label, color, values, shift in bars:
         ax.bar([x + shift for x in xs], values, width * 0.92, color=color, label=label, zorder=3)
+
     together = [x + width for x in xs]
-    ax.scatter(together, [r.total for r in rows], marker="_", s=260, linewidths=2.5,
-               color=c.t.ink, label="Sum", zorder=4)  # fmt: skip
-    ax.scatter(together, [r.independent for r in rows], marker="o", s=34, color=c.t.surface,
-               edgecolors=c.t.ink, linewidths=1.5, label="If independent", zorder=5)  # fmt: skip
+    sums = [r.total for r in rows]
+    independent = [r.independent for r in rows]
+    ax.scatter(together, sums, label="Sum", color=c.t.ink, **SUM_MARK)
+    ring: dict[str, Any] = {**RING_MARK, "color": c.t.surface, "edgecolors": c.t.ink}
+    ax.scatter(together, independent, label="If independent", **ring)
+
     ax.axhline(0, color=c.t.axis, linewidth=0.75, zorder=2)
     c.legend(fig, ax)
     ax.set_xticks(xs, [str(r.batch) for r in rows])
-    ax.set_xlabel("Requests in flight", color=c.t.muted, fontsize=8.5)
+    c.xlabel(ax, "Requests in flight")
     values = [v for r in rows for v in (r.clock, r.spec, r.both, r.total)]
     ax.set_ylim(min(0.0, min(values) * 1.2), max(values) * 1.25)
     ax.yaxis.set_major_formatter(lambda value, _: f"{value:.0f}%")
@@ -383,7 +393,7 @@ def markdown(table: Table, rows: list[Savings]) -> str:
         "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for r in rows:
-        base = 1000 * table[("plain", r.batch, None)].j_per_token
+        base = mj(table, "plain", r.batch, None)
         rate = table[("spec", r.batch, None)].acceptance_rate
         accepted = "n/a" if rate is None else f"{100 * rate:.0f}%"
         lines.append(

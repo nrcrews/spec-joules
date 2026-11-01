@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -100,7 +99,7 @@ def request_body(model: str, prompt: Prompt, max_tokens: int) -> dict[str, Any]:
         "messages": [{"role": "user", "content": prompt.text}],
         "max_tokens": max_tokens,
         "temperature": 0,
-        # Qwen3 would otherwise think first; a direct answer is the common serving case.
+        # Answer directly instead of thinking first.
         "chat_template_kwargs": {"enable_thinking": False},
     }
 
@@ -141,7 +140,3 @@ def served_model(url: str) -> tuple[str, str]:
         engine = client.get("/version").json().get("version", "unknown")
         model = client.get("/v1/models").json()["data"][0]["id"]
     return str(model), str(engine)
-
-
-def dumps(record: dict[str, Any]) -> str:
-    return json.dumps(record)

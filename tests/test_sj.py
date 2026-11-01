@@ -3,6 +3,7 @@ import os
 import signal
 import subprocess
 import sys
+import textwrap
 import time
 from pathlib import Path
 
@@ -98,29 +99,29 @@ def test_verdict_separates_adding_up_stacking_and_competing():
 
 
 def test_headline_title_follows_the_verdicts():
-    stack, compete = saving(1, 20, 40, 52), saving(1, 20, 40, 30)
-    assert plot.headline_title([stack, stack]).endswith("stack at every batch size")
-    rows = [stack, plot.Savings(8, 20, 40, 52, 0, 0), plot.Savings(64, 20, -5, 5, 0, 0)]
-    assert plot.headline_title(rows) == (
-        "Speculation and a lower clock stack up to batch 8, then compete"
+    def stack(batch: int) -> plot.Savings:
+        return saving(batch, 20, 40, 52)
+
+    def compete(batch: int) -> plot.Savings:
+        return saving(batch, 20, 40, 30)
+
+    title = plot.headline_title
+    assert title([stack(1), stack(2)]).endswith("stack at every batch size")
+    assert title([stack(1), stack(8), compete(64)]).endswith("stack up to batch 8, then compete")
+    assert title([compete(1), stack(2), compete(4)]).endswith(
+        "compete at batch 1, 4, and help elsewhere"
     )
-    mixed = [compete, plot.Savings(2, 20, 40, 52, 0, 0), plot.Savings(4, 20, 40, 30, 0, 0)]
-    assert plot.headline_title(mixed).endswith("compete at batch 1, 4, and help elsewhere")
 
 
 def test_best_clock_title_reports_which_way_it_moves():
-    def moved(plain: float, spec: float) -> plot.Savings:
-        return plot.Savings(1, 0, 0, 0, plain, spec)
+    def title(*pairs: tuple[float, float]) -> str:
+        return plot.best_clock_title([plot.Savings(1, 0, 0, 0, p, s) for p, s in pairs])
 
-    assert plot.best_clock_title([moved(1000, 1000), moved(1000, 1010)]).endswith(
-        "move the best clock"
-    )
-    assert plot.best_clock_title([moved(1000, 1260)]).endswith("moves up")
-    assert plot.best_clock_title([moved(1000, 1260), *[moved(900, 900)] * 3]).endswith(
-        "barely moves the best clock"
-    )
-    assert plot.best_clock_title([moved(1260, 1000)]).endswith("moves down")
-    assert plot.best_clock_title([moved(1000, 1260), moved(1260, 1000)]).endswith("both ways")
+    assert title((1000, 1000), (1000, 1010)).endswith("doesn't move the best clock")
+    assert title((1000, 1260)).endswith("moves up")
+    assert title((1260, 1000)).endswith("moves down")
+    assert title((1000, 1260), (1260, 1000)).endswith("both ways")
+    assert title((1000, 1260), *[(900, 900)] * 3).endswith("barely moves the best clock")
 
 
 def test_check_arm_refuses_a_mislabelled_server():
@@ -132,16 +133,14 @@ def test_check_arm_refuses_a_mislabelled_server():
 
 
 class Recorder(sim.SimGpu):
-    def __init__(self) -> None:
-        super().__init__()
-        self.calls: list[str] = []
+    last = ""
 
     def lock_clock(self, mhz: float) -> None:
-        self.calls.append(f"lock {mhz:.0f}")
+        self.last = "lock"
         super().lock_clock(mhz)
 
     def reset_clock(self) -> None:
-        self.calls.append("reset")
+        self.last = "reset"
         super().reset_clock()
 
 
@@ -156,24 +155,20 @@ def test_sweep_unlocks_the_clock_when_a_run_fails(monkeypatch, tmp_path: Path):
     argv = f"--simulate --arm plain --clocks 990 --settle 0 --out {tmp_path / 'r.jsonl'}"
     with pytest.raises(RuntimeError, match="boom"):
         sweep.main(argv.split())
-    assert card.calls[-1] == "reset"
+    assert card.last == "reset"
 
 
 def test_sigterm_unlocks_the_clock(tmp_path: Path):
-    """A real SIGTERM mid-sweep still reaches the reset."""
-    script = f"""
-import sys
-from sj import sim, sweep
-card = sim.SimGpu()
-sim.SimGpu = lambda speculative: card
-reset = card.reset_clock
-def noisy_reset():
-    reset()
-    print("RESET", flush=True)
-card.reset_clock = noisy_reset
-sweep.main("--simulate --arm plain --clocks 990 --batches 1 --duration 30 --settle 0 "
-           "--out {tmp_path / "r.jsonl"}".split())
-"""
+    script = textwrap.dedent(f"""
+        from sj import sim, sweep
+
+        card = sim.SimGpu()
+        sim.SimGpu = lambda speculative: card
+        reset = card.reset_clock
+        card.reset_clock = lambda: (reset(), print("RESET", flush=True))
+        sweep.main("--simulate --arm plain --clocks 990 --batches 1 --duration 30 "
+                   "--settle 0 --out {tmp_path / "r.jsonl"}".split())
+    """)
     child = subprocess.Popen(
         [sys.executable, "-c", script],
         stdout=subprocess.PIPE,
