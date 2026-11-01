@@ -1,0 +1,46 @@
+[project]
+name = "spec-joules"
+version = "0.1.0"
+description = "Do speculative decoding and a locked GPU clock add up, or compete, for LLM decode energy?"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+  "httpx>=0.27",
+  "matplotlib>=3.8",
+  "nvidia-ml-py>=12.535",
+]
+
+[dependency-groups]
+dev = ["mypy>=1.11", "pytest>=8", "ruff>=0.6"]
+
+[project.scripts]
+sj-prompts = "sj.prompts:main"
+sj-sweep = "sj.sweep:main"
+sj-plot = "sj.plot:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["sj"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "RUF", "PTH", "C4", "RET"]
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+files = ["sj"]
+
+[[tool.mypy.overrides]]
+module = ["pynvml"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
