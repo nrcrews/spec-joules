@@ -30,6 +30,7 @@ SIZE_IN = (8.0, 4.5)  # 1600 x 900 at 200 dpi
 DPI = 200
 STACK_TOLERANCE = 2.0  # percentage points of slack before calling it competition
 SAME_CLOCK_MHZ = 30.0
+TIE = 0.01  # energies this close count as equal when picking the best clock
 MARKER_LABELS = {"Sum", "If independent"}  # best clocks closer than this count as the same
 
 FONTS = ["Inter", "Arial", "DejaVu Sans"]
@@ -162,8 +163,13 @@ def locked_clocks(table: Table, arm: str, batch: int) -> list[float]:
 
 
 def best_clock(table: Table, arm: str, batch: int) -> float:
-    """The locked clock with the least energy per token."""
-    return min(locked_clocks(table, arm, batch), key=lambda c: table[(arm, batch, c)].j_per_token)
+    """The fastest locked clock within `TIE` of the least energy per token.
+
+    Clocks that close are a tie in practice; preferring the fastest keeps noise from picking.
+    """
+    clocks = locked_clocks(table, arm, batch)
+    least = min(table[(arm, batch, c)].j_per_token for c in clocks)
+    return max(c for c in clocks if table[(arm, batch, c)].j_per_token <= least * (1 + TIE))
 
 
 def savings(table: Table, batch: int) -> Savings:
@@ -212,6 +218,8 @@ def best_clock_title(rows: list[Savings]) -> str:
     down = sum(m <= -SAME_CLOCK_MHZ for m in moves)
     if not up and not down:
         return "Speculation doesn't move the best clock"
+    if 2 * (up + down) < len(rows):
+        return "Speculation barely moves the best clock"
     if up and not down:
         return "With speculation on, the best clock moves up"
     if down and not up:
@@ -300,7 +308,7 @@ def energy_chart(c: Canvas, table: Table, batch: int, out: Path) -> None:
         ax.annotate(
             f"{best:.0f} MHz",
             (best, y),
-            xytext=(0, -14),
+            xytext=(0, 9 if arm == "plain" else -15),
             textcoords="offset points",
             ha="center",
             fontsize=8.5,
@@ -321,7 +329,7 @@ def best_clock_chart(c: Canvas, rows: list[Savings], out: Path) -> None:
     moved = [r for r in rows if abs(r.spec_best_mhz - r.plain_best_mhz) >= SAME_CLOCK_MHZ]
     detail = ", ".join(f"{r.batch}" for r in moved) if moved else "none"
     subtitle = (
-        f"Locked SM clock with the least energy per token. Batch sizes where it moves: {detail}."
+        f"Fastest locked clock within 1% of the least energy per token. Moves at batch: {detail}."
     )
     fig, ax = c.chart(best_clock_title(rows), subtitle)
     xs = list(range(len(rows)))

@@ -80,6 +80,13 @@ def test_savings_compare_each_arm_at_its_own_best_clock_with_plain():
     assert s.verdict == "stack"
 
 
+def test_best_clock_prefers_the_fastest_of_near_ties():
+    t = table(
+        {("plain", None): 1.0, ("plain", 1500): 0.9, ("plain", 900): 0.805, ("plain", 700): 0.8}
+    )
+    assert plot.best_clock(t, "plain", 1) == 900
+
+
 def saving(batch: int, clock: float, spec: float, both: float) -> plot.Savings:
     return plot.Savings(batch, clock, spec, both, 1200, 1200)
 
@@ -109,6 +116,9 @@ def test_best_clock_title_reports_which_way_it_moves():
         "move the best clock"
     )
     assert plot.best_clock_title([moved(1000, 1260)]).endswith("moves up")
+    assert plot.best_clock_title([moved(1000, 1260), *[moved(900, 900)] * 3]).endswith(
+        "barely moves the best clock"
+    )
     assert plot.best_clock_title([moved(1260, 1000)]).endswith("moves down")
     assert plot.best_clock_title([moved(1000, 1260), moved(1260, 1000)]).endswith("both ways")
 

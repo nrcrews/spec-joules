@@ -2,7 +2,42 @@
 
 Do speculative decoding and a locked GPU clock add up, or compete, for LLM decode energy per token?
 
-Results: pending the first GPU run.
+On an H100 PCIe serving Qwen3-8B, they **stack up to 16 requests in flight, then compete**.
+
+At small batches, an EAGLE-3 draft saves about half the energy per token and a locked clock of
+about 900 MHz saves another quarter of what's left. Together that's 57–62% less energy than
+plain decoding, and still 1.6× faster. From 32 requests in flight the GPU's spare compute runs
+out: together they save less than independent savings would, and at 128 barely more than the
+lower clock alone.
+
+![Energy saved by a lower clock, by speculation, and by both, per batch size](results/h100-pcie/charts/light/headline.png)
+
+## Results
+
+One H100 PCIe (350 W, max SM clock 1755 MHz), vLLM 0.32.0, Qwen3-8B with
+`RedHatAI/Qwen3-8B-speculator.eagle3` drafting 3 tokens. Savings are against plain decoding at
+the default clock. Medians of 2 repeats, 10 s each.
+
+| In flight | Plain | Clock alone | Speculation alone | Both | If independent | Sum | Speed, both |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | 2.64 J/token | 23% | 50% | **62%** | 61% | 73% | 1.65× |
+| 4 | 0.72 J | 22% | 49% | **62%** | 60% | 70% | 1.74× |
+| 16 | 0.22 J | 23% | 43% | **57%** | 57% | 67% | 1.65× |
+| 32 | 0.13 J | 24% | 41% | **50%** | 55% | 65% | 1.50× |
+| 64 | 0.08 J | 21% | 30% | **34%** | 45% | 51% | 1.21× |
+| 128 | 0.05 J | 13% | 9% | **15%** | 22% | 23% | 0.95× |
+
+- **The best clock barely moves.** With or without the draft, energy per token bottoms out
+  around 915 MHz (705 MHz at a couple of batch sizes, within 1%). Turning speculation on is no
+  reason to raise the clock.
+- **Speculation never costs energy here,** even at 128 in flight, but its saving shrinks from
+  50% to 9% as the batch fills the GPU's compute.
+- **Acceptance was steady:** 43–50% of drafted tokens were kept, at every batch size and clock.
+- **Below 915 MHz decode starts to slow faster than power falls,** so 705 MHz rarely helps.
+
+Every batch size, light and dark charts, summary table and raw data:
+[`results/h100-pcie`](results/h100-pcie). Settings: `scripts/run.sh --duration 10 --repeats 2`.
+The whole run cost $2.72.
 
 ## Why ask
 
@@ -71,7 +106,8 @@ uv run sj-plot plain.jsonl spec.jsonl
 - Energy per output token includes the prefill of each prompt, the same in both arms.
 - Closed-loop load: each run keeps a fixed number of requests in flight, then waits for the last
   ones to finish.
-- One card, one model, one draft, one engine version.
+- One card, one model, one draft, one engine version, two repeats. The PCIe card runs near its
+  350 W limit at large batches, so a 700 W SXM card may show bigger clock savings there.
 
 ## Prior art
 
