@@ -75,10 +75,18 @@ uv run sj-plot plain.jsonl spec.jsonl
 
 ## Prior art
 
-- *The Illusion of Power Capping in LLM Decode* (2026): locked clocks for decode.
-- *Only Accepted Tokens Count* (arXiv 2610.40287) and the ACL 2025 energy study of speculative
-  decoding: savings at small batches, costs at large ones.
-- PELM: speculation and frequency scaling together, on-device.
+- Ma et al., [*The Illusion of Power Capping in LLM Decode*](https://arxiv.org/abs/2605.11999)
+  (2026): on an H200, a static SM clock lock saves up to 32% of decode energy where a power cap
+  never engages.
+- Fernandez et al., [*Energy Considerations of LLM Inference and Efficiency
+  Optimizations*](https://aclanthology.org/2025.acl-long.1563/) (ACL 2025), and Dutta et al.,
+  [*Benchmarking the Energy Savings with Speculative Decoding
+  Strategies*](https://arxiv.org/abs/2602.09113) (EACL 2026 Findings): speculation's energy
+  savings depend on the workload and batch size, and it can cost energy.
+- Yang et al., [*PELM*](https://arxiv.org/abs/2609.09662) (2026): speculation and DVFS tuned
+  together, on-device.
+
+As far as I can find, nobody has measured the combination on a datacenter GPU.
 
 ## Development
 
