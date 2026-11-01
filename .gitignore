@@ -4,8 +4,8 @@ __pycache__/
 .mypy_cache/
 .ruff_cache/
 .pytest_cache/
-charts/
-out/
+/charts/
+/out/
 *.jsonl
 !prompts/*.jsonl
 !results/**/*.jsonl
