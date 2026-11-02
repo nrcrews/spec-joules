@@ -107,7 +107,7 @@ def test_headline_title_follows_the_verdicts():
 
     title = plot.headline_title
     assert title([stack(1), stack(2)]).endswith("stack at every batch size")
-    assert title([stack(1), stack(8), compete(64)]).endswith("stack up to batch 8, then compete")
+    assert title([stack(1), stack(8), compete(64)]).endswith("stack up to batch 8")
     assert title([compete(1), stack(2), compete(4)]).endswith(
         "compete at batch 1, 4, and help elsewhere"
     )

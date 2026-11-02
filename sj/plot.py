@@ -211,8 +211,8 @@ def headline_title(rows: list[Savings]) -> str:
     if len(runs) == 1:
         return f"{lead} {runs[0][0]} at every batch size"
     if len(runs) == 2:
-        (first, _, edge), (second, _, _) = runs
-        return f"{lead} {first} up to batch {rows[edge].batch}, then {second}"
+        first, _, edge = runs[0]
+        return f"{lead} {first} up to batch {rows[edge].batch}"
     competing = ", ".join(str(r.batch) for r in rows if r.verdict == "compete")
     return f"{lead} compete at batch {competing or 'none'}, and help elsewhere"
 

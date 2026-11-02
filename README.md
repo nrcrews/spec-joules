@@ -2,7 +2,7 @@
 
 Do speculative decoding and a locked GPU clock add up, or compete, for LLM decode energy?
 
-On an H100 PCIe serving Qwen3-8B, they **stack up to 16 requests in flight, then compete**.
+On an H100 PCIe serving Qwen3-8B, they **stack up to 16 requests in flight**. With more, they compete.
 Together they cut energy per token by 57–62% at small batches while decoding 1.6× faster.
 
 ![Energy saved by a lower clock, by speculation, and by both, per batch size](results/h100-pcie/charts/light/headline.png)
